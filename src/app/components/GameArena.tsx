@@ -1,8 +1,9 @@
 import { Suspense, useRef, useEffect, useState, useMemo } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { useGLTF, useAnimations, Environment, ContactShadows } from '@react-three/drei';
+import { useGLTF, useAnimations, Environment, ContactShadows, SoftShadows } from '@react-three/drei';
 import * as THREE from 'three';
 import { useControls } from 'leva';
+import { EffectComposer, Bloom, Vignette } from '@react-three/postprocessing';
 
 import kickerModelPath  from '@/assets/models/kicker.glb?url';
 import keeperModelPath  from '@/assets/models/keeper_center.glb?url';
@@ -13,8 +14,6 @@ import goalPath         from '@/assets/models/goal.glb?url';
 import idlePath         from '@/assets/models/standing_idle.glb?url';
 import kickAnimPath     from '@/assets/models/soccer_penalty_kicker.glb?url';
 import catchPath        from '@/assets/models/new_goalkeeper_catch_center.glb?url';
-
-const ANIM = 'Armature|mixamo.com|Layer0';
 
 ;[kickerModelPath, keeperModelPath, keeperLModelPath, keeperRModelPath,
   ballPath, goalPath, idlePath, kickAnimPath, catchPath
@@ -51,7 +50,21 @@ function Ball({ shot }: { shot: Shot | null }) {
   const { scene } = useGLTF(ballPath);
   const mesh = useMemo(() => scene.clone(true), [scene]);
 
-  // Твои сохраненные значения для мяча
+  // Улучшаем материалы мяча (блики и тени)
+  useEffect(() => {
+    mesh.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+        if (child.material) {
+          const mat = child.material as THREE.MeshStandardMaterial;
+          mat.envMapIntensity = 1.5;
+          mat.roughness = 0.4;
+        }
+      }
+    });
+  }, [mesh]);
+
   const { bX, bY, bZ, bScale } = useControls('Ball', {
     bX: { value: 1, step: 0.1 },
     bY: { value: 0.15, step: 0.05 },
@@ -83,7 +96,7 @@ function Ball({ shot }: { shot: Shot | null }) {
 
   return (
     <group ref={ref} scale={bScale}>
-      <primitive object={mesh} castShadow />
+      <primitive object={mesh} />
     </group>
   );
 }
@@ -92,7 +105,6 @@ function Ball({ shot }: { shot: Shot | null }) {
 function Keeper({ aiDir, active }: { aiDir: 'left'|'center'|'right'; active: boolean }) {
   const group = useRef<THREE.Group>(null);
 
-  // Выбираем файл в зависимости от того, куда бьет игрок
   const modelPath = aiDir === 'left' ? keeperLModelPath
     : aiDir === 'right' ? keeperRModelPath : keeperModelPath;
 
@@ -112,12 +124,21 @@ function Keeper({ aiDir, active }: { aiDir: 'left'|'center'|'right'; active: boo
     kScale: { value: 1.5, step: 0.1 },
   });
 
+  // Включаем тени для вратаря
   useEffect(() => {
-    // УМНЫЙ ПОИСК АНИМАЦИИ: берем первую доступную из списка
+    scene.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+      }
+    });
+  }, [scene]);
+
+  useEffect(() => {
+    // Берем первую попавшуюся анимацию из файлов (решает проблему с разными названиями в Mixamo)
     const idleAction = idleActions ? Object.values(idleActions)[0] : null;
     
     let currentDiveAction = null;
-
     if (aiDir === 'center') {
       currentDiveAction = (catchActions && Object.values(catchActions)[0]) || 
                           (diveActions && Object.values(diveActions)[0]); 
@@ -125,20 +146,14 @@ function Keeper({ aiDir, active }: { aiDir: 'left'|'center'|'right'; active: boo
       currentDiveAction = diveActions ? Object.values(diveActions)[0] : null;
     }
 
-    // Если анимация не найдена, выводим ошибку в консоль, чтобы знать наверняка
-    if (!idleAction || !currentDiveAction) {
-      console.warn(`🚨 Анимация не найдена для направления: ${aiDir}. Проверь файл ${modelPath}`);
-      return;
-    }
+    if (!idleAction || !currentDiveAction) return;
 
     if (active) {
-      // Прыжок
       idleAction.fadeOut(0.2);
       currentDiveAction.reset().setLoop(THREE.LoopOnce, 1);
       currentDiveAction.clampWhenFinished = true;
       currentDiveAction.fadeIn(0.2).play();
     } else {
-      // Стойка
       currentDiveAction.fadeOut(0.2);
       idleAction.reset().setLoop(THREE.LoopRepeat, Infinity).fadeIn(0.2).play();
     }
@@ -147,11 +162,11 @@ function Keeper({ aiDir, active }: { aiDir: 'left'|'center'|'right'; active: boo
       if (currentDiveAction) currentDiveAction.stop();
       if (idleAction) idleAction.stop();
     };
-  }, [active, aiDir, diveActions, idleActions, catchActions, modelPath]);
+  }, [active, aiDir, diveActions, idleActions, catchActions]);
 
   return (
     <group ref={group} position={[kX, kY, kZ]} rotation={[0, kRotY, 0]} scale={kScale}>
-      <primitive object={scene} castShadow receiveShadow />
+      <primitive object={scene} />
     </group>
   );
 }
@@ -166,7 +181,6 @@ function Kicker({ kicking }: { kicking: boolean }) {
   const { animations: ka } = useGLTF(kickAnimPath);
   const { actions: kickA } = useAnimations(ka, group);
 
-  // Твои сохраненные значения для кикера
   const { pX, pY, pZ, pRotY, pScale } = useControls('Player', { 
     pX: { value: 0, step: 0.1 },
     pY: { value: -1.5, step: 0.1 },
@@ -175,9 +189,19 @@ function Kicker({ kicking }: { kicking: boolean }) {
     pScale: { value: 1.5, step: 0.1 }
   });
 
+  // Включаем тени для игрока
   useEffect(() => {
-    const idle = idleA[ANIM];
-    const kick = kickA[ANIM];
+    scene.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+      }
+    });
+  }, [scene]);
+
+  useEffect(() => {
+    const idle = idleA ? Object.values(idleA)[0] : null;
+    const kick = kickA ? Object.values(kickA)[0] : null;
     if (!idle || !kick) return;
 
     if (kicking) {
@@ -193,7 +217,7 @@ function Kicker({ kicking }: { kicking: boolean }) {
 
   return (
     <group ref={group} position={[pX, pY, pZ]} rotation={[0, pRotY, 0]} scale={pScale}>
-      <primitive object={scene} castShadow receiveShadow />
+      <primitive object={scene} />
     </group>
   );
 }
@@ -203,7 +227,28 @@ function Goal() {
   const { scene } = useGLTF(goalPath);
   const mesh = useMemo(() => scene.clone(true), [scene]);
 
-  // Твои сохраненные значения для ворот
+  // Делаем штанги металлическими, а сетку - прозрачной
+  useEffect(() => {
+    mesh.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+        if (child.material) {
+          const mat = child.material as THREE.MeshStandardMaterial;
+          mat.envMapIntensity = 1.2;
+          if (mat.name.toLowerCase().includes('wire') || mat.name.toLowerCase().includes('net') || mat.name.toLowerCase().includes('alpha')) {
+            mat.transparent = true;
+            mat.side = THREE.DoubleSide;
+            mat.alphaTest = 0.5;
+          } else {
+            mat.metalness = 0.8;
+            mat.roughness = 0.2;
+          }
+        }
+      }
+    });
+  }, [mesh]);
+
   const { gX, gY, gZ, gRotY, gScale } = useControls('Goal', {
     gX: { value: 0, step: 0.1 },
     gY: { value: -1.5, step: 0.1 },
@@ -213,14 +258,7 @@ function Goal() {
   });
 
   return (
-    <primitive 
-      object={mesh} 
-      position={[gX, gY, gZ]} 
-      rotation={[0, gRotY, 0]} 
-      scale={gScale} 
-      castShadow 
-      receiveShadow 
-    />
+    <primitive object={mesh} position={[gX, gY, gZ]} rotation={[0, gRotY, 0]} scale={gScale} />
   );
 }
 
@@ -229,12 +267,12 @@ function Field() {
     <>
       <mesh rotation={[-Math.PI/2, 0, 0]} position={[0, -1.5, 0]} receiveShadow>
         <planeGeometry args={[100, 100]} />
-        <meshStandardMaterial color="#1a5c28" roughness={0.95} />
+        <meshStandardMaterial color="#144a1e" roughness={1} metalness={0} />
       </mesh>
       {[-4,-3,-2,-1,0,1,2,3,4].map(i => (
-        <mesh key={i} rotation={[-Math.PI/2, 0, 0]} position={[i*5, -1.498, 0]}>
+        <mesh key={i} rotation={[-Math.PI/2, 0, 0]} position={[i*5, -1.498, 0]} receiveShadow>
           <planeGeometry args={[5, 100]} />
-          <meshStandardMaterial color={i%2===0?'#185425':'#1d6630'} roughness={0.95}/>
+          <meshStandardMaterial color={i%2===0?'#12421b':'#175423'} roughness={1} metalness={0}/>
         </mesh>
       ))}
       {([
@@ -243,14 +281,14 @@ function Field() {
         { p:[-8,-1.494,-1.5] as [number,number,number], s:[0.1,12] as [number,number] },
         { p:[ 8,-1.494,-1.5] as [number,number,number], s:[0.1,12] as [number,number] },
       ]).map(({p,s},i) => (
-        <mesh key={i} rotation={[-Math.PI/2, 0, 0]} position={p}>
+        <mesh key={i} rotation={[-Math.PI/2, 0, 0]} position={p} receiveShadow>
           <planeGeometry args={s}/>
-          <meshStandardMaterial color="#fff" transparent opacity={0.5}/>
+          <meshStandardMaterial color="#ffffff" emissive="#ffffff" emissiveIntensity={0.2} roughness={0.8}/>
         </mesh>
       ))}
-      <mesh rotation={[-Math.PI/2, 0, 0]} position={[0, -1.493, 5.5]}>
+      <mesh rotation={[-Math.PI/2, 0, 0]} position={[0, -1.493, 5.5]} receiveShadow>
         <circleGeometry args={[0.15, 20]}/>
-        <meshStandardMaterial color="#fff" transparent opacity={0.7}/>
+        <meshStandardMaterial color="#ffffff" emissive="#ffffff" emissiveIntensity={0.2} roughness={0.8}/>
       </mesh>
     </>
   );
@@ -273,6 +311,8 @@ export function GameArena({ result, playerChoice, aiChoice }: GameArenaProps) {
   const [lastResult, setLastResult] = useState<string|null>(null);
 
   const aiDir = (aiChoice ?? 'center') as 'left'|'center'|'right';
+  
+  // Отзеркаливаем направление для визуала (решает проблему "сценического лево")
   const visualKeeperDir = aiDir === 'left' ? 'right' : aiDir === 'right' ? 'left' : 'center';
 
   useEffect(() => {
@@ -321,20 +361,31 @@ export function GameArena({ result, playerChoice, aiChoice }: GameArenaProps) {
       width: '100vw', height: '100vh',
       zIndex: 0, background: '#0a1628',
     }}>
-      <Canvas shadows gl={{ antialias: true }} fov={50} near={0.1} far={300}>
+      <Canvas 
+        shadows 
+        // 1. ОГРАНИЧИВАЕМ РАЗРЕШЕНИЕ: 
+        // Вместо [1, 2] ставим [1, 1.5]. Картинка останется четкой, но видеокарте будет в 2 раза легче.
+        dpr={[1, 1.5]} 
+        gl={{ antialias: false, toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: 1.1 }} 
+        fov={50} near={0.1} far={300}
+      >
         <DebugCamera />
+        
+        {/* 2. УМЕНЬШАЕМ КАЧЕСТВО МЯГКИХ ТЕНЕЙ (samples с 10 до 5) */}
+        <SoftShadows size={15} focus={0.5} samples={5} />
         
         <ambientLight intensity={1.2} />
         <directionalLight
           position={[5, 15, 8]} intensity={2.0} castShadow
-          shadow-mapSize-width={2048} shadow-mapSize-height={2048}
+          // 3. СНИЖАЕМ РАЗРЕШЕНИЕ КАРТЫ ТЕНЕЙ С 2048 ДО 1024
+          shadow-mapSize-width={1024} shadow-mapSize-height={1024}
           shadow-camera-left={-20} shadow-camera-right={20}
           shadow-camera-top={20} shadow-camera-bottom={-20}
-          shadow-camera-far={60}
+          shadow-camera-far={60} shadow-bias={-0.0001}
         />
         <directionalLight position={[-6, 8, -4]} intensity={0.5} color="#b0d4ff" />
         <hemisphereLight args={['#a8d0ff', '#1a5c25', 0.4]} />
-        <Environment preset="dawn" />
+        <Environment preset="dawn" background blur={0.8} />
 
         <Field />
 
@@ -352,8 +403,16 @@ export function GameArena({ result, playerChoice, aiChoice }: GameArenaProps) {
         </Suspense>
 
         <ContactShadows position={[0,-1.49,0]} opacity={0.6} scale={40} blur={2} far={14} />
+
+        {/* 4. ОТКЛЮЧАЕМ СГЛАЖИВАНИЕ ПОСТОБРАБОТКИ (multisampling={0}) */}
+        {/* Оно жрет больше всего ресурсов, а на современных экранах лесенки и так не видны */}
+        <EffectComposer disableNormalPass multisampling={0}>
+          <Bloom luminanceThreshold={1.2} mipmapBlur intensity={0.4} />
+          <Vignette eskil={false} offset={0.1} darkness={0.9} />
+        </EffectComposer>
       </Canvas>
 
+      {/* UI Результата */}
       {showResultVisual && (
         <div style={{
           position: 'absolute', inset: 0, zIndex: 5,
