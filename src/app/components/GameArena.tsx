@@ -51,7 +51,7 @@ function Ball({ shot }: { shot: Shot | null }) {
   const { scene } = useGLTF(ballPath);
   const mesh = useMemo(() => scene.clone(true), [scene]);
 
-  // Leva настройки для мяча
+  // Твои сохраненные значения для мяча
   const { bX, bY, bZ, bScale } = useControls('Ball', {
     bX: { value: 1, step: 0.1 },
     bY: { value: 0.15, step: 0.05 },
@@ -91,48 +91,63 @@ function Ball({ shot }: { shot: Shot | null }) {
 // ── ВРАТАРЬ ───────────────────────────────────────────────
 function Keeper({ aiDir, active }: { aiDir: 'left'|'center'|'right'; active: boolean }) {
   const group = useRef<THREE.Group>(null);
-  
+
+  // Выбираем файл в зависимости от того, куда бьет игрок
   const modelPath = aiDir === 'left' ? keeperLModelPath
     : aiDir === 'right' ? keeperRModelPath : keeperModelPath;
 
-  const { scene } = useGLTF(modelPath);
-  
-  const { animations: catchAnimations } = useGLTF(catchPath);
+  const { scene, animations: diveAnimations } = useGLTF(modelPath);
   const { animations: idleAnimations } = useGLTF(idlePath);
+  const { animations: catchAnimations } = useGLTF(catchPath);
 
-  const { actions: catchActions } = useAnimations(catchAnimations, group);
+  const { actions: diveActions } = useAnimations(diveAnimations, group);
   const { actions: idleActions } = useAnimations(idleAnimations, group);
+  const { actions: catchActions } = useAnimations(catchAnimations, group);
 
-  // Leva настройки для вратаря
   const { kX, kY, kZ, kRotY, kScale } = useControls('Keeper', {
     kX: { value: 0, step: 0.1 },
     kY: { value: -1.5, step: 0.1 },
     kZ: { value: -9.5, step: 0.1 },
     kRotY: { value: 0, step: 0.1, min: -Math.PI, max: Math.PI },
-    kScale: { value: 1.5, step: 0.1 },
+    kScale: { value: 1.0, step: 0.1 },
   });
 
   useEffect(() => {
-    const catchAction = catchActions[ANIM];
-    const idleAction = idleActions[ANIM];
+    // УМНЫЙ ПОИСК АНИМАЦИИ: берем первую доступную из списка
+    const idleAction = idleActions ? Object.values(idleActions)[0] : null;
+    
+    let currentDiveAction = null;
 
-    if (!catchAction || !idleAction) return;
+    if (aiDir === 'center') {
+      currentDiveAction = (catchActions && Object.values(catchActions)[0]) || 
+                          (diveActions && Object.values(diveActions)[0]); 
+    } else {
+      currentDiveAction = diveActions ? Object.values(diveActions)[0] : null;
+    }
+
+    // Если анимация не найдена, выводим ошибку в консоль, чтобы знать наверняка
+    if (!idleAction || !currentDiveAction) {
+      console.warn(`🚨 Анимация не найдена для направления: ${aiDir}. Проверь файл ${modelPath}`);
+      return;
+    }
 
     if (active) {
+      // Прыжок
       idleAction.fadeOut(0.2);
-      catchAction.reset().setLoop(THREE.LoopOnce, 1);
-      catchAction.clampWhenFinished = true;
-      catchAction.fadeIn(0.2).play();
+      currentDiveAction.reset().setLoop(THREE.LoopOnce, 1);
+      currentDiveAction.clampWhenFinished = true;
+      currentDiveAction.fadeIn(0.2).play();
     } else {
-      catchAction.fadeOut(0.2);
+      // Стойка
+      currentDiveAction.fadeOut(0.2);
       idleAction.reset().setLoop(THREE.LoopRepeat, Infinity).fadeIn(0.2).play();
     }
 
     return () => {
-      catchAction.stop();
-      idleAction.stop();
+      if (currentDiveAction) currentDiveAction.stop();
+      if (idleAction) idleAction.stop();
     };
-  }, [active, catchActions, idleActions]);
+  }, [active, aiDir, diveActions, idleActions, catchActions, modelPath]);
 
   return (
     <group ref={group} position={[kX, kY, kZ]} rotation={[0, kRotY, 0]} scale={kScale}>
@@ -151,7 +166,7 @@ function Kicker({ kicking }: { kicking: boolean }) {
   const { animations: ka } = useGLTF(kickAnimPath);
   const { actions: kickA } = useAnimations(ka, group);
 
-  // Leva настройки для кикера
+  // Твои сохраненные значения для кикера
   const { pX, pY, pZ, pRotY, pScale } = useControls('Player', { 
     pX: { value: 0, step: 0.1 },
     pY: { value: -1.5, step: 0.1 },
@@ -188,7 +203,7 @@ function Goal() {
   const { scene } = useGLTF(goalPath);
   const mesh = useMemo(() => scene.clone(true), [scene]);
 
-  // Leva настройки для ворот
+  // Твои сохраненные значения для ворот
   const { gX, gY, gZ, gRotY, gScale } = useControls('Goal', {
     gX: { value: 0, step: 0.1 },
     gY: { value: -1.5, step: 0.1 },
@@ -210,7 +225,6 @@ function Goal() {
 }
 
 function Field() {
-  // Поле обычно остается статичным, как база координат
   return (
     <>
       <mesh rotation={[-Math.PI/2, 0, 0]} position={[0, -1.5, 0]} receiveShadow>
@@ -259,6 +273,7 @@ export function GameArena({ result, playerChoice, aiChoice }: GameArenaProps) {
   const [lastResult, setLastResult] = useState<string|null>(null);
 
   const aiDir = (aiChoice ?? 'center') as 'left'|'center'|'right';
+  const visualKeeperDir = aiDir === 'left' ? 'right' : aiDir === 'right' ? 'left' : 'center';
 
   useEffect(() => {
     if (result && result !== 'waiting' && result !== 'idle') {
@@ -329,7 +344,7 @@ export function GameArena({ result, playerChoice, aiChoice }: GameArenaProps) {
 
         <Suspense fallback={null}>
           <Kicker kicking={kicking} />
-          <Keeper aiDir={aiDir} active={keeperActive} />
+          <Keeper key={visualKeeperDir} aiDir={visualKeeperDir} active={keeperActive} />
         </Suspense>
 
         <Suspense fallback={null}>
