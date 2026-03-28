@@ -109,7 +109,7 @@ function Keeper({ aiDir, active }: { aiDir: 'left'|'center'|'right'; active: boo
     kY: { value: -1.5, step: 0.1 },
     kZ: { value: -9.5, step: 0.1 },
     kRotY: { value: 0, step: 0.1, min: -Math.PI, max: Math.PI },
-    kScale: { value: 1.0, step: 0.1 },
+    kScale: { value: 1.5, step: 0.1 },
   });
 
   useEffect(() => {
